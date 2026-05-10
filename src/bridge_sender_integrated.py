@@ -76,15 +76,20 @@ _init_lock = threading.Lock()
 
 def get_node_c():
     global _node_c_instance
-    with _init_lock:
-        if _node_c_instance is None:
-            log_event("Node C", "INIT", "NodeC 엔진 초기화 중 (모델 로드 포함)...")
-            _node_c_instance = NodeC()
-            log_event("Node C", "INIT", "✅ NodeC 엔진 초기화 완료 (분석 준비 완료)")
+    if _node_c_instance is None:
+        with _init_lock:
+            if _node_c_instance is None:
+                log_event("Node C", "INIT", "NodeC 엔진 초기화 중 (모델 로드 포함)...")
+                _node_c_instance = NodeC()
+                log_event("Node C", "INIT", "✅ NodeC 엔진 초기화 완료 (분석 준비 완료)")
     return _node_c_instance
 
 def process_and_build_request(session_id, user_text, nonverbal_vector, candidates, fused_emotion):
     request_id = f"turn_{uuid.uuid4().hex[:8]}"
+    
+    # [안전성] Numpy 배열 타입 강제 변환 (잠재적 연산 에러 방지)
+    if not isinstance(nonverbal_vector, np.ndarray):
+        nonverbal_vector = np.array(nonverbal_vector, dtype=np.float32)
     
     # [성능 최적화] 텍스트가 없는 경우 (표정 데이터 전송 등) 무거운 분석 엔진 초기화를 건너뜁니다.
     if not user_text or user_text.strip() == "":

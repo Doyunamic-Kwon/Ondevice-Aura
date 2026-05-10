@@ -23,15 +23,24 @@ class AuraPerceptionServicer(aura_pb2_grpc.AuraPerceptionServicer):
         
         # 백그라운드 처리를 위한 스레드 풀 생성
         self.executor = futures.ThreadPoolExecutor(max_workers=5)
+        self.bg_active_count = 0
+        import threading
+        self.bg_lock = threading.Lock()
 
     def _bg_send_to_node_b(self, prompt_request):
         """백그라운드에서 Node B로 데이터를 전송하는 헬퍼 함수"""
+        with self.bg_lock:
+            self.bg_active_count += 1
+            
         try:
-            print(f"  [Async] Node B({NODE_B_ADDRESS})로 데이터 전송 중...")
+            print(f"  [Async] Node B({NODE_B_ADDRESS})로 데이터 전송 중... (대기 중인 전송: {self.bg_active_count}개)")
             send_with_safety(prompt_request)
             print(f"  [Async] Node B 전송 완료!")
         except Exception as e:
             print(f"  [Async] 전송 중 오류 발생: {e}")
+        finally:
+            with self.bg_lock:
+                self.bg_active_count -= 1
 
     def is_significant_change(self, v, a):
         now = time.time()
@@ -58,6 +67,16 @@ class AuraPerceptionServicer(aura_pb2_grpc.AuraPerceptionServicer):
         return True
 
     def SendFacePerception(self, request, context):
+        # 큐 보호 로직: Node B가 바쁘면(진행 중인 작업 2개 이상) 표정 업데이트 스킵하여 딜레이 누적 방지
+        with self.bg_lock:
+            if self.bg_active_count >= 2:
+                print("~", end="", flush=True) # 바빠서 스킵함을 물결표로 표시
+                return aura_pb2.EmpathyResponse(
+                    session_id="session_live",
+                    text="Node B 바쁨 (스킵)",
+                    strategy="skip_busy"
+                )
+
         # 변화량이 적으면 Node B 호출 없이 즉시 응답 (서버 부하 감소)
         if not self.is_significant_change(request.valence, request.arousal):
             print(".", end="", flush=True) # 변화가 적을 때는 점 하나만 찍어서 작동 중임을 표시
