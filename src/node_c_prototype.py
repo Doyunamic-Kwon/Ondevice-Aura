@@ -185,12 +185,25 @@ class NodeC:
     def process_data(self, text: str, nonverbal_vector: np.ndarray) -> Dict:
         start_time = time.time()
         
+        # 텍스트가 없는 경우 (표정 데이터만 들어온 경우 등) 무거운 분석 프로세스 스킵
+        if not text or text.strip() == "":
+            return {
+                "kg_context": [],
+                "alignment": {"score": 1.0, "is_consistent": True, "detected_anomaly": "None"},
+                "priority": 1,
+                "latency_ms": 0.0
+            }
+
         # 1. Entity Linking & KG Search
+        print(f"    [Step 1] 키워드 추출 및 KG 검색 중...", end=" ", flush=True)
         keywords = self.text_processor.extract_keywords(text)
         kg_context = self.kg_searcher.search_context(keywords)
+        print(f"완료 ({len(kg_context)}건)")
         
         # 2. 텍스트 감성 추출 (V-A 모델)
+        print(f"    [Step 2] 텍스트 감정 분석 중...", end=" ", flush=True)
         text_sentiment = self.sentiment_analyzer.get_sentiment(text)
+        print(f"완료 (V:{text_sentiment[0]:.2f}, A:{text_sentiment[1]:.2f})")
         
         # 3. Sentiment Alignment Check
         alignment_result = self.alignment_checker.check_alignment(text_sentiment, nonverbal_vector)

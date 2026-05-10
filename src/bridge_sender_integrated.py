@@ -70,21 +70,32 @@ You are Aura, an empathetic AI companion.
 # 2. 통합 분석 및 gRPC 요청 조립 (Node C -> Node B)
 # =====================================================
 # 성능 최적화: 모델과 DB 연결을 매번 하지 않도록 전역 객체로 관리합니다.
+import threading
 _node_c_instance = None
+_init_lock = threading.Lock()
 
 def get_node_c():
     global _node_c_instance
-    if _node_c_instance is None:
-        log_event("Node C", "INIT", "NodeC 엔진 초기화 중 (모델 로드 포함)...")
-        _node_c_instance = NodeC()
+    with _init_lock:
+        if _node_c_instance is None:
+            log_event("Node C", "INIT", "NodeC 엔진 초기화 중 (모델 로드 포함)...")
+            _node_c_instance = NodeC()
     return _node_c_instance
 
 def process_and_build_request(session_id, user_text, nonverbal_vector, candidates, fused_emotion):
     request_id = f"turn_{uuid.uuid4().hex[:8]}"
-    node_c = get_node_c()
     
-    log_event("Node C", request_id, "분석 시작")
-    node_c_result = node_c.process_data(user_text, nonverbal_vector)
+    # [성능 최적화] 텍스트가 없는 경우 (표정 데이터 전송 등) 무거운 분석 엔진 초기화를 건너뜁니다.
+    if not user_text or user_text.strip() == "":
+        log_event("Node C", request_id, "텍스트 없음: 분석 스킵 및 즉시 조립")
+        node_c_result = {
+            "kg_context": [],
+            "alignment": {"score": 1.0, "is_consistent": True},
+        }
+    else:
+        node_c = get_node_c()
+        log_event("Node C", request_id, f"분석 시작 (텍스트: {user_text[:15]}...)")
+        node_c_result = node_c.process_data(user_text, nonverbal_vector)
     
     kg_context_str = "\n".join(node_c_result["kg_context"])
     alignment = node_c_result["alignment"]

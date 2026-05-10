@@ -8,7 +8,7 @@ import math
 sys.path.append(os.path.dirname(__file__))
 import aura_pb2
 import aura_pb2_grpc
-from bridge_sender_integrated import process_and_build_request, send_with_safety
+from bridge_sender_integrated import process_and_build_request, send_with_safety, NODE_B_ADDRESS
 
 class AuraPerceptionServicer(aura_pb2_grpc.AuraPerceptionServicer):
     def __init__(self):
@@ -16,16 +16,29 @@ class AuraPerceptionServicer(aura_pb2_grpc.AuraPerceptionServicer):
         self.last_valence = 0.0
         self.last_arousal = 0.0
         self.last_sent_time = 0.0
-        self.threshold = 0.12  # 변화량 임계치 (이보다 적게 변하면 무시)
-        self.min_interval = 1.0 # 최소 전송 간격 (1초)
+        self.is_first_data = True  # 최초 전송 여부 확인용
+        self.threshold = 0.08      # 변화량 임계치 (민감도 상향)
+        self.min_interval = 0.5    # 최소 전송 간격 (0.5초)
+        self.max_interval = 5.0    # 강제 전송 간격 (5초 동안 변화 없어도 현재 상태 유지 위해 전송)
 
     def is_significant_change(self, v, a):
         now = time.time()
-        # 시간 간격 확인
+        
+        # 1. 최초 데이터인 경우 무조건 전송
+        if self.is_first_data:
+            self.is_first_data = False
+            return True
+            
+        # 2. 강제 전송 간격(Heartbeat) 확인: 5초 이상 지났으면 변화 없어도 전송
+        if now - self.last_sent_time > self.max_interval:
+            print("\n[Heartbeat] 상태 유지 전송", end=" ")
+            return True
+
+        # 3. 최소 전송 간격 확인 (너무 빈번한 전송 방지)
         if now - self.last_sent_time < self.min_interval:
             return False
             
-        # 수치 변화량 확인
+        # 4. 수치 변화량 확인
         diff = math.sqrt((v - self.last_valence)**2 + (a - self.last_arousal)**2)
         if diff < self.threshold:
             return False
@@ -35,6 +48,7 @@ class AuraPerceptionServicer(aura_pb2_grpc.AuraPerceptionServicer):
     def SendFacePerception(self, request, context):
         # 변화량이 적으면 Node B 호출 없이 즉시 응답 (서버 부하 감소)
         if not self.is_significant_change(request.valence, request.arousal):
+            print(".", end="", flush=True) # 변화가 적을 때는 점 하나만 찍어서 작동 중임을 표시
             return aura_pb2.EmpathyResponse(
                 session_id="session_live",
                 text="상태 유지 (변화량 적음)",
@@ -57,8 +71,8 @@ class AuraPerceptionServicer(aura_pb2_grpc.AuraPerceptionServicer):
             description=f"표정 기반 분석: {request.emotion_label}"
         )
         
-        # 3. Node C 파이프라인 가동 및 Node B로 프롬프트 전송
-        print("  -> Node C 분석 시작 및 Node B로 프롬프트 전송...")
+        # 3. Node C 파이프라인 가동 (분석 후 조립)
+        print("  -> Node C 분석 파이프라인 가동 (지식 검색 및 감정 분석)...")
         prompt_request = process_and_build_request(
             session_id="session_live",
             user_text=user_text,
@@ -67,6 +81,7 @@ class AuraPerceptionServicer(aura_pb2_grpc.AuraPerceptionServicer):
             fused_emotion=fused_emotion
         )
         
+        print(f"  -> 분석 완료! Node B({NODE_B_ADDRESS})로 데이터 전송 중...")
         response = send_with_safety(prompt_request)
         print(f"  -> Node B 응답 수신 완료!")
         return response
@@ -87,7 +102,7 @@ class AuraPerceptionServicer(aura_pb2_grpc.AuraPerceptionServicer):
         )
         
         # 3. Node C 파이프라인 가동 (수신된 텍스트를 바탕으로 지식 검색 및 분석 수행)
-        print(f"  -> Node C 분석 시작 (텍스트: '{user_text}') 및 Node B로 전송...")
+        print(f"  -> Node C 분석 파이프라인 가동 (텍스트: '{user_text}')...")
         prompt_request = process_and_build_request(
             session_id="session_voice",
             user_text=user_text,
@@ -96,6 +111,7 @@ class AuraPerceptionServicer(aura_pb2_grpc.AuraPerceptionServicer):
             fused_emotion=fused_emotion
         )
         
+        print(f"  -> 분석 완료! Node B({NODE_B_ADDRESS})로 데이터 전송 중...")
         response = send_with_safety(prompt_request)
         print(f"  -> Node B 응답 수신 완료!")
         return response
