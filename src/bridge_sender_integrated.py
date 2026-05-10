@@ -42,7 +42,7 @@ You are Aura, an empathetic AI companion.
 {candidate_lines}
 
 [Fused Emotion State]
-- State: {fused_emotion.emotion_label}
+- State: {fused_emotion.primary_emotion}
 - Description: {fused_emotion.description}
 - Valence: {fused_emotion.valence:.2f}
 - Arousal: {fused_emotion.arousal:.2f}
