@@ -11,19 +11,50 @@ import aura_pb2_grpc
 from bridge_sender_integrated import process_and_build_request, send_with_safety
 
 class AuraPerceptionServicer(aura_pb2_grpc.AuraPerceptionServicer):
+    def __init__(self):
+        # 마지막으로 Node B에 전송한 상태 저장 (필터링용)
+        self.last_valence = 0.0
+        self.last_arousal = 0.0
+        self.last_sent_time = 0.0
+        self.threshold = 0.12  # 변화량 임계치 (이보다 적게 변하면 무시)
+        self.min_interval = 1.0 # 최소 전송 간격 (1초)
+
+    def is_significant_change(self, v, a):
+        now = time.time()
+        # 시간 간격 확인
+        if now - self.last_sent_time < self.min_interval:
+            return False
+            
+        # 수치 변화량 확인
+        diff = math.sqrt((v - self.last_valence)**2 + (a - self.last_arousal)**2)
+        if diff < self.threshold:
+            return False
+            
+        return True
+
     def SendFacePerception(self, request, context):
+        # 변화량이 적으면 Node B 호출 없이 즉시 응답 (서버 부하 감소)
+        if not self.is_significant_change(request.valence, request.arousal):
+            return aura_pb2.EmpathyResponse(
+                session_id="session_live",
+                text="상태 유지 (변화량 적음)",
+                strategy="skip"
+            )
+
         print(f"\n[Node C Server] 수신된 표정 데이터: {request.emotion_label} (V:{request.valence:.2f}, A:{request.arousal:.2f})")
         
-        # 1. 현재 Node A에서 텍스트 데이터가 안 넘어오므로 빈 문자열 처리
-        # (빈 문자열이 들어가면 Node C 로직은 안전하게 지식 검색을 스킵합니다)
-        user_text = "" 
+        # 상태 업데이트
+        self.last_valence = request.valence
+        self.last_arousal = request.arousal
+        self.last_sent_time = time.time()
         
-        # 2. Fused Emotion 상태 생성
+        user_text = "" 
         fused_emotion = aura_pb2.FusedEmotionState(
             primary_emotion=request.emotion_label,
             confidence=request.confidence,
             valence=request.valence,
-            arousal=request.arousal
+            arousal=request.arousal,
+            description=f"표정 기반 분석: {request.emotion_label}"
         )
         
         # 3. Node C 파이프라인 가동 및 Node B로 프롬프트 전송
@@ -40,18 +71,60 @@ class AuraPerceptionServicer(aura_pb2_grpc.AuraPerceptionServicer):
         print(f"  -> Node B 응답 수신 완료!")
         return response
 
+    def SendVoicePerception(self, request, context):
+        print(f"\n[Node C Server] 수신된 음성 데이터: {request.text} (V:{request.valence:.2f}, A:{request.arousal:.2f})")
+        
+        # 1. 음성에서 인식된 텍스트 사용
+        user_text = request.text
+        
+        # 2. Fused Emotion 상태 생성
+        fused_emotion = aura_pb2.FusedEmotionState(
+            primary_emotion="voice_emotion",
+            confidence=request.confidence,
+            valence=request.valence,
+            arousal=request.arousal,
+            description=f"음성 톤 분석: {request.emotion_label}"
+        )
+        
+        # 3. Node C 파이프라인 가동 (수신된 텍스트를 바탕으로 지식 검색 및 분석 수행)
+        print(f"  -> Node C 분석 시작 (텍스트: '{user_text}') 및 Node B로 전송...")
+        prompt_request = process_and_build_request(
+            session_id="session_voice",
+            user_text=user_text,
+            nonverbal_vector=[request.valence, request.arousal],
+            candidates=[request],
+            fused_emotion=fused_emotion
+        )
+        
+        response = send_with_safety(prompt_request)
+        print(f"  -> Node B 응답 수신 완료!")
+        return response
+
+import socket
+
+def get_my_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
 def serve():
-    # Node C 서버는 50052 포트를 사용합니다. (Node B는 보통 50051)
-    port = 50052
+    # Node C 서버 포트 설정 (사용자 요청에 따라 5052 사용)
+    port = 5052
+    my_ip = get_my_ip()
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     aura_pb2_grpc.add_AuraPerceptionServicer_to_server(AuraPerceptionServicer(), server)
     server.add_insecure_port(f'[::]:{port}')
     server.start()
     
     print("======================================================")
-    print(f"🚀 [Node C] AuraPerception Server가 {port}번 포트에서 열렸습니다!")
-    print("   Node A 코드에서 target_address를 'localhost:50052'로 변경해주세요.")
-    print("   Node C 서버는 표정 변화량이 클 때만 Node B를 호출합니다.")
+    print(f" [Node C] AuraPerception Server가 가동되었습니다!")
+    print(f"   - 접속 주소: {my_ip}:{port}")
+    print(f"   - Node A 담당자에게 위 주소를 전달해주세요.")
     print("======================================================")
     
     try:
