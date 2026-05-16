@@ -18,9 +18,10 @@ Node C (융합)
         ↓ gRPC (5051)
 Node B (추론) ← 여기
   ① Fail-safe 위기 감지
-  ② BRD 감정 변화량 계산
-  ③ Ollama LLM 공감 발화 생성
-  ④ TTS 전송
+  ② 표정 변화량 계산 → 프롬프트 반영
+  ③ 컨텍스트 윈도우 히스토리 관리
+  ④ Ollama LLM 공감 발화 생성
+  ⑤ TTS 전송
         ↓ gRPC
 Node A (TTS 출력)
 ```
@@ -44,7 +45,7 @@ Node_B/
 ## 의존성 설치
 
 ```bash
-pip3 install torch numpy requests grpcio grpcio-tools --break-system-packages
+pip3 install requests grpcio grpcio-tools --break-system-packages
 ```
 
 ---
@@ -110,17 +111,26 @@ python3 test_connection.py --host 192.168.0.37 --full
 위기 키워드 감지 시 LLM 호출 없이 즉시 전문가 안내 출력
 
 ```
-감지 키워드: 죽, 사라지, 없어지, 포기, 끝내, 못 살겠
+감지 키워드: 죽, 자살, 사라지고 싶, 없어지고 싶, 포기하고 싶, 끝내고 싶, 못 살겠, 살기 싫
 응답 시간: <1ms (LLM 완전 차단)
 ```
 
-### BRD (Baseline-Relative Delta)
-절대적 감정값이 아닌 개인 기준선 대비 변화량으로 공감 모드 결정
+### 표정 변화량 감지
+이전 프레임 대비 V/A 변화량을 계산하여 프롬프트에 자동 반영
 
 ```
-초기 5회 대화 → 개인 기준선 학습
-이후 delta > 0.3 → HIGH 공감 모드
-기준선 SQLite 로컬 저장 (재실행 시 유지)
+delta < 0.2  → 변화 없음 (프롬프트 그대로)
+delta ≥ 0.2  → "[표정 변화] 감정 변화 감지 (변화량=0.25)"
+delta ≥ 0.4  → "[표정 변화] 급격한 감정 악화 감지 (변화량=0.55) — 더 깊은 공감 필요"
+```
+
+### 컨텍스트 윈도우 (HistoryManager)
+세션별 대화 히스토리를 유지하여 이전 대화 맥락을 참조
+
+```
+최근 5턴 유지 (session_id 기준으로 세션 분리)
+히스토리 + 현재 발화 → Ollama chat API로 전달
+세션 종료 시 메모리에서 자동 해제
 ```
 
 ### KG Context 정제
@@ -129,6 +139,16 @@ Node C에서 받은 ATOMIC raw 문자열을 자연어로 변환
 ```
 입력: "personx finishes project(은)는 X(와)과 HinderedBy 관계임"
 출력: "방해 요소: X"
+```
+
+### Node B 규칙 주입
+LLM 호출 전 Node C 프롬프트에 응답 규칙을 자동으로 덧붙임
+
+```
+- 반드시 한국어로만 응답. 영어 사용 절대 금지.
+- 이모지 사용 금지.
+- 상대방에게 할 말만 출력. 설명, 분석, 태그 출력 금지.
+- 2문장 이내로 간결하게. 조언 금지.
 ```
 
 ---
@@ -150,12 +170,12 @@ Node C에서 받은 ATOMIC raw 문자열을 자연어로 변환
 ### 수신 (Node C → Node B)
 ```protobuf
 message ContextualPrompt {
-  string session_id   // 사용자 세션
-  string request_id   // 요청 ID (응답에 그대로 반환)
-  string final_prompt // Node C가 생성한 프롬프트
-  float  valence      // 감정 수치 V
-  float  arousal      // 감정 수치 A
-  string user_text    // 원본 발화 (Fail-safe용)
+  string session_id    // 사용자 세션
+  string request_id    // 요청 ID (응답에 그대로 반환)
+  string final_prompt  // Node C가 생성한 프롬프트
+  float  valence       // 감정 수치 V
+  float  arousal       // 감정 수치 A
+  string user_text     // 원본 발화 (Fail-safe용)
   FusedEmotionState fused_emotion
 }
 ```
@@ -165,9 +185,9 @@ message ContextualPrompt {
 message EmpathyResponse {
   string session_id
   string request_id
-  string text          // 공감 발화
-  float  response_time // 처리 시간 (ms)
-  string strategy      // 응답 전략
+  string text           // 공감 발화
+  float  response_time  // 처리 시간 (ms)
+  string strategy       // 응답 전략
   ErrorCode error_code
 }
 ```
@@ -185,6 +205,11 @@ message EmpathyResponse {
 > LLM 추론 속도는 Ollama 웜업 후 측정 기준
 
 ---
+
+## 실행 예시
+
+![테스트 실행 로그](./images/log_example1.png)
+(./images/log_example2.png)
 
 ## 참고 논문
 
