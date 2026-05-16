@@ -362,3 +362,16 @@ python3 src/import_atomic.py
 ```bash
 python3 main.py
 ```
+
+---
+
+## 구동 예시
+
+### 1. 서비스 시동 및 의존성 확인
+![Startup Commands](docs/images/startup_commands.png)
+
+### 2. Aura Node C 서버 실행 및 초기화 완료
+![Execution Output](docs/images/execution_output.png)
+
+### 3. 실시간 감정 분석 및 프롬프트 조립 (Node B 전송)
+![Realtime Execution](docs/images/realtime_execution.png)
