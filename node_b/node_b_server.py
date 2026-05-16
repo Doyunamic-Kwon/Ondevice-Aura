@@ -135,7 +135,7 @@ class AuraServicer(aura_pb2_grpc.AuraServiceServicer):
           request.user_text     → NodeCPacket.stt_text (Fail-safe용)
           request.valence       → NodeCPacket.valence
           request.arousal       → NodeCPacket.arousal
-          request.session_id    → BRDCalculator user_id
+          request.session_id    → HistoryManager session_id
           request.request_id    → 응답에 그대로 반환
         """
         has_text = bool(request.user_text.strip())
@@ -182,21 +182,13 @@ class AuraServicer(aura_pb2_grpc.AuraServiceServicer):
             )
 
             # ── Step 3: NodeBCore 처리 ───────────────────
-            # BRD는 session_id 기준으로 개인화
-            self.node_b.brd.user_id = request.session_id or "default"
+            packet.session_id = request.session_id or "default"
             result = self.node_b.process(packet)
 
             # ── Step 4: 전략 결정 ────────────────────────
-            brd = result.get("brd")
-            if brd:
-                empathy_mode = brd.get("empathy_mode", "NORMAL")
-            else:
-                empathy_mode = "NORMAL"
-
             strategy = _select_strategy(
                 request.valence,
                 request.arousal,
-                empathy_mode,
                 request.fused_emotion,
             )
 
@@ -295,27 +287,20 @@ class AuraPerceptionServicer(aura_pb2_grpc.AuraPerceptionServicer):
 def _select_strategy(
     valence       : float,
     arousal       : float,
-    empathy_mode  : str,
     fused_emotion : aura_pb2.FusedEmotionState,
 ) -> str:
     """
-    감정 상태 + BRD 모드 → 응답 전략 결정
+    감정 상태 → 응답 전략 결정
     EmpathyResponse.strategy 필드에 기록
     """
-    primary = fused_emotion.primary_emotion if fused_emotion else ""
-
-    if empathy_mode == "HIGH":
-        if valence < -0.5 and arousal < -0.3:
-            return "DEEP_VALIDATION"     # 우울/무기력 → 깊은 수용
-        elif valence < -0.5 and arousal > 0.3:
-            return "ANGER_ACKNOWLEDGMENT"  # 분노/좌절 → 감정 인정
-        else:
-            return "HIGH_EMPATHY"
+    if valence < -0.5 and arousal < -0.3:
+        return "DEEP_VALIDATION"
+    elif valence < -0.5 and arousal > 0.3:
+        return "ANGER_ACKNOWLEDGMENT"
+    elif abs(valence) < 0.2:
+        return "NEUTRAL_CHAT"
     else:
-        if abs(valence) < 0.2:
-            return "NEUTRAL_CHAT"        # 중립 → 일상 대화
-        else:
-            return "NORMAL_EMPATHY"
+        return "NORMAL_EMPATHY"
 
 
 def _make_fallback_prompt(candidate: aura_pb2.EmotionCandidate) -> str:
